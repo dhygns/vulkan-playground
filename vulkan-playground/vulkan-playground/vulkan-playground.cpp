@@ -30,19 +30,74 @@ int main() {
 
 	VkApplicationInfo appInfo = {};
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-	appInfo.pApplicationName = "Hello Vulkan";
+	appInfo.pApplicationName = "Hello Vulkan RT";
 	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 	appInfo.pEngineName = "No Engine";
 	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
 	appInfo.apiVersion = VK_API_VERSION_1_0;
 
+	// 디버깅 용도로, 더 진행하기전에 레이어를 추가해야함
+	uint32_t layerCount;
+	vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+
+	std::vector<VkLayerProperties> availableLayers(layerCount);
+	vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+
+	std::cout << "Available Vulkan Layers:\n";
+	for (const auto& layer : availableLayers) {
+		std::cout << "  " << layer.layerName << std::endl;
+	}
+	std::cout << std::endl;
+
+	const std::vector<const char*> validationLayers = {
+		"VK_LAYER_KHRONOS_validation"
+	};
+
+	const std::vector<const char*> instanceExtensions = {
+		VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+	};
+
 	VkInstanceCreateInfo createInfo = {};
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	createInfo.pApplicationInfo = &appInfo;
 
+	// 확장 기능 등록 (디버깅을 위한)
+	createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+	createInfo.ppEnabledLayerNames = validationLayers.data();
+	createInfo.enabledExtensionCount = static_cast<uint32_t>(instanceExtensions.size());
+	createInfo.ppEnabledExtensionNames = instanceExtensions.data();
+
 	if (vkCreateInstance(&createInfo, nullptr, &s_Instance) != VK_SUCCESS) {
 		std::cerr << "Failed to create Vulkan instance" << std::endl;
 		return -1;
+	}
+
+	// 생성된 Instance를 기반으로 Debug callback 생성
+	VkDebugUtilsMessengerEXT debugMessenger;
+
+	VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+	debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+	debugCreateInfo.messageSeverity =
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+	debugCreateInfo.messageType =
+		VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+	debugCreateInfo.pfnUserCallback = [](
+		VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+		VkDebugUtilsMessageTypeFlagsEXT messageType,
+		const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+		void* pUserData) -> VkBool32 {
+			std::cerr << "Validation Layer: " << pCallbackData->pMessage << std::endl;
+			return VK_FALSE;
+		};
+
+	// 확장 함수 가져오기 (vkCreateDebugUtilsMessenger)
+	auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(s_Instance, "vkCreateDebugUtilsMessengerEXT");
+
+	if (func != nullptr) {
+		func(s_Instance, &debugCreateInfo, nullptr, &debugMessenger);
 	}
 
 	// 물리 디바이스 선택
@@ -78,6 +133,7 @@ int main() {
 	while (true) {
 		std::cout << "Select Physical Device Index [0 - " << physicalDeviceCount - 1 << "] : ";
 		std::cin >> selectedPhysicalDeviceIndex;
+		std::cout << std::endl;
 		if (0 <= selectedPhysicalDeviceIndex < physicalDeviceCount) {
 			// 선택된 Physical Device 정보 출력
 			VkPhysicalDevice& physicalDevice = physicalDevices[selectedPhysicalDeviceIndex];
