@@ -34,7 +34,7 @@ int main() {
 	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 	appInfo.pEngineName = "No Engine";
 	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-	appInfo.apiVersion = VK_API_VERSION_1_0;
+	appInfo.apiVersion = VK_API_VERSION_1_3; // <- Vulkan 1.1 이상의 기능을 쓰려면 api 버전을 명확하게 명시해줘야함.
 
 	// 디버깅 용도로, 더 진행하기전에 레이어를 추가해야함
 	uint32_t layerCount;
@@ -53,19 +53,46 @@ int main() {
 		"VK_LAYER_KHRONOS_validation"
 	};
 
-	const std::vector<const char*> instanceExtensions = {
+	const std::vector<const char*> requiredInstanceExtensions = {
+		VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, // Instance 확장
 		VK_EXT_DEBUG_UTILS_EXTENSION_NAME
 	};
+
+	// Ray Tracing을 위해 확장기능을 추가해야함
+	uint32_t availableInstanceExtensionCount = 0;
+	vkEnumerateInstanceExtensionProperties(nullptr, &availableInstanceExtensionCount, nullptr);
+
+	std::vector<VkExtensionProperties> availableInstanceExtensions(availableInstanceExtensionCount);
+	vkEnumerateInstanceExtensionProperties(nullptr, &availableInstanceExtensionCount, availableInstanceExtensions.data());
+
+	for (const auto& requiredInstanceExtension : requiredInstanceExtensions)
+	{
+		bool found = false;
+		for (const auto& availableInstanceExtension : availableInstanceExtensions) {
+			if (strcmp(availableInstanceExtension.extensionName, requiredInstanceExtension) == 0) {
+				std::cout << requiredInstanceExtension << " ... [OK]" << std::endl;
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			std::cerr << requiredInstanceExtension << "... Missing instance extension" << std::endl;
+			return -1;
+		}
+	}
+	std::cout << std::endl;
 
 	VkInstanceCreateInfo createInfo = {};
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	createInfo.pApplicationInfo = &appInfo;
 
-	// 확장 기능 등록 (디버깅을 위한)
+	// 확장 기능 등록 (디버깅을 위한) - 레이어
 	createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
 	createInfo.ppEnabledLayerNames = validationLayers.data();
-	createInfo.enabledExtensionCount = static_cast<uint32_t>(instanceExtensions.size());
-	createInfo.ppEnabledExtensionNames = instanceExtensions.data();
+
+	// 확장 기능 등록 - extensions
+	createInfo.enabledExtensionCount = static_cast<uint32_t>(requiredInstanceExtensions.size());
+	createInfo.ppEnabledExtensionNames = requiredInstanceExtensions.data();
 
 	if (vkCreateInstance(&createInfo, nullptr, &s_Instance) != VK_SUCCESS) {
 		std::cerr << "Failed to create Vulkan instance" << std::endl;
@@ -89,7 +116,7 @@ int main() {
 		VkDebugUtilsMessageTypeFlagsEXT messageType,
 		const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
 		void* pUserData) -> VkBool32 {
-			std::cerr << "Validation Layer: " << pCallbackData->pMessage << std::endl;
+			std::cerr << "Validation Layer: " << pCallbackData->pMessage << std::endl << std::endl;
 			return VK_FALSE;
 		};
 
@@ -192,15 +219,88 @@ int main() {
 	queueCreateInfo.queueCount = 1;
 	queueCreateInfo.pQueuePriorities = &queuePriority;
 
+	// RayCasting을 위해서 확장기능을 추가해야함
+	std::vector<const char*> requiredDeviceExtensions = {
+		VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+		VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+		VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+		VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+		VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+		VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+		VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
+		VK_KHR_DEVICE_GROUP_EXTENSION_NAME,                     // 추가!
+		VK_KHR_MAINTENANCE3_EXTENSION_NAME                      // 추가!
+	};
+
+	uint32_t extensionCount;
+	vkEnumerateDeviceExtensionProperties(s_PhysicalDevice, nullptr, &extensionCount, nullptr);
+
+	std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+	vkEnumerateDeviceExtensionProperties(s_PhysicalDevice, nullptr, &extensionCount, availableExtensions.data());
+
+	for (const char* required : requiredDeviceExtensions) {
+		bool found = false;
+		for (const auto& ext : availableExtensions) {
+			if (strcmp(required, ext.extensionName) == 0) {
+				std::cout << required << " ... [OK]" << std::endl;
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			std::cerr << required << " ... Missing required device extension" << std::endl;
+			return -1;
+		}
+	}
+
+	std::cout << std::endl;
+
+	// 논리 Device 생성을 위한 Ray Tracing 관련 기능 구조체 셋업
+	VkPhysicalDeviceAccelerationStructureFeaturesKHR accelStructFeatures{};
+	accelStructFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+	accelStructFeatures.accelerationStructure = VK_TRUE;
+	accelStructFeatures.pNext = nullptr;
+
+	VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtPipelineFeatures{};
+	rtPipelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+	rtPipelineFeatures.rayTracingPipeline = VK_TRUE;
+	rtPipelineFeatures.pNext = &accelStructFeatures; // 다양한 확장 기능은 pNext를 통해 확장합니다.
+
+	VkPhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
+	bufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+	bufferDeviceAddressFeatures.bufferDeviceAddress = VK_TRUE;
+	bufferDeviceAddressFeatures.pNext = &rtPipelineFeatures; // 다양한 확장 기능은 pNext를 통해 확장합니다.
+
+	VkPhysicalDeviceVulkan11Features vulkan11Features{};
+	vulkan11Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+	vulkan11Features.pNext = &bufferDeviceAddressFeatures;
+
+	VkPhysicalDeviceFeatures2 deviceFeature2{};
+	deviceFeature2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+	deviceFeature2.pNext = &vulkan11Features;
+
+	// 최종 device 생성
 	VkDeviceCreateInfo deviceCreateInfo{};
 	deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+	
+	// Queue 생성
 	deviceCreateInfo.queueCreateInfoCount = 1;
 	deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+
+	// 확장기능 
+	deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtensions.size());
+	deviceCreateInfo.ppEnabledExtensionNames = requiredDeviceExtensions.data();
+
+	// 구조체 확장
+	deviceCreateInfo.pNext = &deviceFeature2; // 다양한 확장 기능은 pNext를 통해 확장합니다.
 
 	if (vkCreateDevice(s_PhysicalDevice, &deviceCreateInfo, nullptr, &s_Device) != VK_SUCCESS) {
 		std::cerr << "Failed to create logical device!" << std::endl;
 		return -1;
 	}
+
+	// 위 과정을 통해 Raytracing용 구조체 확장 및 / 확장 기능 사용여부를 제공한뒤 Device를 생성해야
+	// vkCmdTraceRaysKHR() 와 같은 명령어를 쓸 수 있습니다.
 
 	std::cout << "Logical device created successfully!" << std::endl;
 	return 0;
